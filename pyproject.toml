@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "eduvision"
+version = "0.1.0"
+description = "EduVision Proof of Concept"
+authors = ["Damian Kobyliński <damiankob12@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.11, <3.14"
+ultralytics = "^8.3.75"
+pyinstaller = "^6.12.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
