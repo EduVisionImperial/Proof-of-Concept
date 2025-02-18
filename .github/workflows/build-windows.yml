@@ -30,7 +30,7 @@ jobs:
         run: poetry run pyinstaller --onefile --add-data "./validation/best.pt;./validation/best.pt" predict.py
 
       - name: Archive Build Artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: windows-exe
           path: dist/*.exe
