@@ -27,7 +27,7 @@ jobs:
         run: poetry install --no-root
 
       - name: Build .exe
-        run: poetry run pyinstaller --onefile --add-data "./validation/best.pt;./validation/best.pt" predict.py
+        run: poetry run pyinstaller --onefile --add-data "./validation/best.pt;validation" predict.py
 
       - name: Archive Build Artifacts
         uses: actions/upload-artifact@v4
