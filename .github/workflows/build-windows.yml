@@ -24,7 +24,7 @@ jobs:
         run: pip install poetry
 
       - name: Install dependencies
-        run: poetry install
+        run: poetry install --no-root
 
       - name: Build .exe
         run: poetry run pyinstaller --onefile --add-data "./validation/best.pt;./validation/best.pt" predict.py
