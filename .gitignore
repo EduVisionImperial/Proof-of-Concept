@@ -97,5 +97,10 @@ PreviousTests/
 PreviousTests/*
 runs/
 runs/*
+build/
+build/*
+dist/
+dist/*
 custom_db.yaml
 yolo*.pt
+poetry.lock
