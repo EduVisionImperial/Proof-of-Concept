@@ -2,76 +2,79 @@
 
 cd /d %~dp0
 
-pyenv --version >nul 2>&1
-IF ERRORLEVEL 1 (
-    echo pyenv-win is not installed.
-    echo Installing pyenv-win...
-
-    git --version >nul 2>&1
-    IF ERRORLEVEL 1 (
-        echo Git is not installed.
-        echo Installing Git...
-
-        winget install --id Git.Git -e --source winget
-        IF ERRORLEVEL 1 (
-             echo Failed to download the Git installer.
-             pause
-             exit /b
-        )
-        echo Git has been installed.
-        start "" cmd /k "cd /d %CD%"
-        exit
-    ) ELSE (
-        echo Git is already installed.
+git --version >nul 2>&1
+IF %ERRORLEVEL% NEQ 0 (
+    echo [INFO] Git is not installed.
+    echo [INFO] Installing Git via winget...
+    winget install --id Git.Git -e --source winget
+    IF %ERRORLEVEL% NEQ 0 (
+        echo [ERROR] Git installation via winget failed.
+        echo [INFO] Please install Git manually or ensure winget is available.
+        pause
+        exit /b
     )
+    echo [INFO] Git installed successfully.
+    echo.
+    echo [INFO] You may need to close and reopen your terminal so that Git is available.
+    echo [INFO] After reopening, re-run this script.
+    pause
+) ELSE (
+    echo [INFO] Git is already installed.
+)
+
+for /f "tokens=*" %%i in ('pyenv --version 2^>null') do set PYENV_VAR==%%i
+IF defined PYENV_VAR (
+    echo [INFO] pyenv-win is not installed.
+    echo [INFO] Installing pyenv-win...
 
     git clone https://github.com/pyenv-win/pyenv-win.git %USERPROFILE%\.pyenv\pyenv-win
-    IF ERRORLEVEL 1 (
-         echo Failed to clone the pyenv-win repository.
-         pause
-         exit /b
+    IF %ERRORLEVEL% NEQ 0 (
+        echo [ERROR] Failed to clone the pyenv-win repository.
+        pause
     )
 
+    echo [INFO] pyenv-win has been installed.
     set "PATH=%USERPROFILE%\.pyenv\pyenv-win\bin;%USERPROFILE%\.pyenv\pyenv-win\shims;%PATH%"
-    echo pyenv-win has been installed.
-
-    echo pyenv-win has been installed.
 ) ELSE (
-    echo pyenv-win is already installed.
+    echo [INFO] pyenv-win is already installed.
+    set "PATH=%USERPROFILE%\.pyenv\pyenv-win\bin;%USERPROFILE%\.pyenv\pyenv-win\shims;%PATH%"
 )
 
-pyenv versions | findstr "3.11.9" >nul 2>&1
-IF ERRORLEVEL 1 (
-    echo Python 3.11.9 is not installed. Installing...
+pyenv versions | findstr "3.11.9"
+IF %ERRORLEVEL% NEQ 0 (
+    echo [INFO] Python 3.11.9 is not installed. Installing...
     pyenv install 3.11.9
-    IF ERRORLEVEL 1 (
-         echo Failed to install Python 3.11.9.
-         pause
-         exit /b
+    pyenv global 3.11.9
+    IF %ERRORLEVEL% NEQ 0 (
+        echo [ERROR] Failed to install Python 3.11.9.
+        pause
     )
 ) ELSE (
-    echo Python 3.11.9 is already installed.
+    echo [INFO] Python 3.11.9 is already installed.
 )
 
-pyenv global 3.11.9
-echo Python 3.11.9 has been set as the global version.
 poetry --version >nul 2>&1
+IF %ERRORLEVEL% NEQ 0 (
+    echo [INFO] Poetry is not installed.
+    echo [INFO] Installing Poetry now...
 
-IF ERRORLEVEL 1 (
-    echo Poetry is not installed.
-    echo Installing Poetry now...
-
-    (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
-    IF ERRORLEVEL 1 (
-         echo Failed to download the Poetry installer.
+    curl -sSL https://install.python-poetry.org -o install-poetry.py
+    IF %ERRORLEVEL% NEQ 0 (
+         echo [ERROR] Failed to download the Poetry installer.
          pause
-         exit /b
     )
 
-    echo Poetry has been installed.
-) ELSE (
-    echo Poetry is already installed.
-)
-poetry run python predict.py
+    python install-poetry.py
+    IF %ERRORLEVEL% NEQ 0 (
+         echo [ERROR] Failed to install Poetry.
+         pause
+    )
 
-pause
+    del install-poetry.py
+    set "PATH=%USERPROFILE%\AppData\Roaming\Python\Scripts;%PATH%"
+    echo [INFO] Poetry has been installed.
+) ELSE (
+    echo [INFO] Poetry is already installed.
+)
+
+poetry run python predict.py
