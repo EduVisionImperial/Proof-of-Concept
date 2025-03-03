@@ -101,6 +101,8 @@ build/
 build/*
 dist/
 dist/*
+Documentation/
+Documentation/*
 custom_db.yaml
 yolo*.pt
 poetry.lock
