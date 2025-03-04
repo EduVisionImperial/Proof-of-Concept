@@ -4,10 +4,62 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 from ultralytics import YOLO
 import time
+import subprocess
+from collections import defaultdict, Counter
+
+
+def list_cameras():
+    result = subprocess.run(['v4l2-ctl', '--list-devices'], stdout=subprocess.PIPE, text=True)
+    output = result.stdout.split('\n')
+    cameras = {}
+    current_device = None
+
+    for line in output:
+        if line.endswith(':'):
+            current_device = line[:-1]
+        elif '/dev/video' in line:
+            device_path = line.strip()
+            if current_device and current_device not in cameras.values():
+                cameras[device_path] = current_device
+
+    return cameras
+
+
+def select_camera():
+    cameras = list_cameras()
+    if not cameras:
+        messagebox.showerror("Error", "No cameras found")
+        return None
+    camera_list = [f"{i}. {device} ({name})" for i, (device, name) in enumerate(cameras.items())]
+    camera_selection = simpledialog.askinteger("Select Camera", f"Available cameras:\n" + "\n".join(camera_list) + "\nEnter camera number:")
+    if camera_selection is not None and 0 <= camera_selection < len(cameras):
+        selected_device = list(cameras.keys())[camera_selection]
+        print(f"Selected camera: {selected_device}")
+        return selected_device
+    messagebox.showerror("Error", "Invalid camera selection")
+    return None
+
+
+def calculate_resistance(colors, color_values):
+    if len(colors) < 4:
+        return None
+
+    first_digit = color_values[colors[0]]
+    second_digit = color_values[colors[1]]
+    multiplier = 10 ** color_values[colors[2]]
+    resistance = (first_digit * 10 + second_digit) * multiplier
+
+    tolerance_values = {
+        "brown": 1, "red": 2, "green": 0.5, "blue": 0.25, "violet": 0.1, "gray": 0.05, "yellow": 5, "silver": 10
+    }
+
+    tolerance = tolerance_values.get(colors[3], 0)
+    return resistance, tolerance
+
 
 class EduVision:
-    def __init__(self, root):
-        self.root = root
+    def __init__(self, main):
+        self.root = main
         self.root.title("EduVision")
         self.root.geometry("600x400")
 
@@ -18,6 +70,8 @@ class EduVision:
         self.object_ids = {}
         self.frozen_objects = {}
         self.results = []
+        self.color_detections = defaultdict(list)
+        self.last_seen = {}
 
         self.color_values = {
             "black": 0, "brown": 1, "red": 2, "orange": 3, "yellow": 4,
@@ -27,15 +81,10 @@ class EduVision:
         self.color_ranges = {
             "black": ((0, 0, 0), (180, 255, 30)),
             "brown": ((10, 100, 20), (20, 255, 200)),
-            "red": ((0, 100, 100), (10, 255, 255)),
             "orange": ((10, 100, 100), (25, 255, 255)),
             "yellow": ((25, 100, 100), (35, 255, 255)),
             "green": ((35, 100, 100), (85, 255, 255)),
-            "blue": ((85, 100, 100), (125, 255, 255)),
-            "violet": ((125, 100, 100), (145, 255, 255)),
-            "gray": ((0, 0, 50), (180, 50, 200)),
             "white": ((0, 0, 200), (180, 20, 255)),
-            "gold": ((20, 100, 100), (30, 255, 255)),
             "silver": ((0, 0, 192), (180, 50, 255))
         }
 
@@ -54,36 +103,15 @@ class EduVision:
 
         self.table.bind("<Double-1>", self.on_row_double_click)
 
-    def list_cameras(self):
-        index = 0
-        available_cameras = []
-        while True:
-            cap = cv2.VideoCapture(index)
-            if not cap.read()[0]:
-                break
-            available_cameras.append(index)
-            cap.release()
-            index += 1
-        return available_cameras
-
-    def select_camera(self):
-        cameras = self.list_cameras()
-        if not cameras:
-            messagebox.showerror("Error", "No cameras found")
-            return None
-        camera_index = simpledialog.askinteger("Select Camera", f"Available cameras: {cameras}\nEnter camera index:")
-        if camera_index in cameras:
-            return camera_index
-        messagebox.showerror("Error", "Invalid camera index")
-        return None
-
     def start_detection(self):
         if not self.running:
-            self.camera_index = self.select_camera()
+            self.camera_index = select_camera()
             if self.camera_index is not None:
                 self.running = True
                 self.thread = threading.Thread(target=self.detect_objects)
                 self.thread.start()
+                self.cleanup_thread = threading.Thread(target=self.cleanup_old_entries)
+                self.cleanup_thread.start()
         else:
             messagebox.showinfo("Info", "Detection is already running")
 
@@ -91,6 +119,7 @@ class EduVision:
         if self.running:
             self.running = False
             self.thread.join()
+            self.cleanup_thread.join()
             messagebox.showinfo("Info", "Detection stopped")
         else:
             messagebox.showinfo("Info", "Detection is not running")
@@ -101,8 +130,6 @@ class EduVision:
             messagebox.showerror("Error", "Could not open camera")
             return
 
-        last_seen = {}
-
         while self.running:
             ret, frame = cap.read()
             if not ret:
@@ -111,7 +138,6 @@ class EduVision:
             self.frame = frame
 
             self.results = self.model.track(source=frame, conf=0.3, show_conf=False, persist=True)
-            current_time = time.time()
 
             for result in self.results:
                 for obj in result.boxes:
@@ -119,16 +145,7 @@ class EduVision:
                         yolo_id = int(obj.id.item())
                         if yolo_id not in self.object_ids:
                             self.object_ids[yolo_id] = len(self.object_ids) + 1
-                        last_seen[yolo_id] = current_time
-
-            for yolo_id in list(last_seen.keys()):
-                if current_time - last_seen[yolo_id] > 3:
-                    del last_seen[yolo_id]
-                    if yolo_id in self.resistors_data:
-                        del self.resistors_data[yolo_id]
-                    if yolo_id in self.tree_items:
-                        self.table.delete(self.tree_items[yolo_id])
-                        del self.tree_items[yolo_id]
+                        self.last_seen[yolo_id] = time.time()
 
             self.recognize_resistor_colors(frame, self.results)
             cv2.imshow("EduVision", frame)
@@ -147,10 +164,8 @@ class EduVision:
 
                     if yolo_id in self.frozen_objects and self.frozen_objects[yolo_id]:
                         resistance = self.table.item(self.tree_items[yolo_id], "values")[2]
-                        cv2.putText(frame, f"ID: {yolo_id}", (x1, y1 - 20),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-                        cv2.putText(frame, resistance, (x1, y2 + 20),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                        cv2.putText(frame, f"ID: {yolo_id}", (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                        cv2.putText(frame, resistance, (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
                         continue
 
                     if x2 <= x1 or y2 <= y1:
@@ -165,27 +180,20 @@ class EduVision:
                         if cv2.countNonZero(mask) > 0 and color_name not in recognized_colors:
                             recognized_colors.append(color_name)
 
-                    cv2.putText(frame, f"ID: {yolo_id}", (x1, y1 - 20),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                    self.color_detections[yolo_id].append(recognized_colors)
 
-                    if len(recognized_colors) >= 4:
-                        resistance, tolerance = self.calculate_resistance(recognized_colors[:4], self.color_values)
-                        cv2.putText(frame, f"{resistance} Ohms {tolerance}%", (x1, y2 + 20),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-                        self.update_resistor_entry(yolo_id, recognized_colors[:4], resistance, tolerance)
+                    most_common_colors = Counter(
+                        [color for colors in self.color_detections[yolo_id] for color in colors]).most_common(4)
+                    best_colors = [color for color, _ in most_common_colors]
 
-    def calculate_resistance(self, colors, color_values):
-        first_digit = color_values[colors[0]]
-        second_digit = color_values[colors[1]]
-        multiplier = 10 ** color_values[colors[2]]
-        resistance = (first_digit * 10 + second_digit) * multiplier
-
-        tolerance_values = {
-            "brown": 1, "red": 2, "green": 0.5, "blue": 0.25, "violet": 0.1, "gray": 0.05, "gold": 5, "silver": 10
-        }
-
-        tolerance = tolerance_values.get(colors[3], 0)
-        return resistance, tolerance
+                    if len(best_colors) >= 4:
+                        result = calculate_resistance(best_colors[:4], self.color_values)
+                        if result is not None:
+                            resistance, tolerance = result
+                            cv2.putText(frame, f"ID: {yolo_id}", (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                            cv2.putText(frame, f"{resistance} Ohms {tolerance}%", (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                            self.update_resistor_entry(yolo_id, best_colors[:4], resistance, tolerance)
+                            self.color_detections[yolo_id] = []
 
     def update_resistor_entry(self, yolo_id, colors, resistance, tolerance):
         self.resistors_data[yolo_id] = {
@@ -202,7 +210,19 @@ class EduVision:
         else:
             self.table.item(self.tree_items[yolo_id], values=(yolo_id, colors, res_str, "Freeze"))
 
-    def on_row_double_click(self, event):
+    def cleanup_old_entries(self):
+        while self.running:
+            current_time = time.time()
+            to_delete = [yolo_id for yolo_id, last_seen in self.last_seen.items() if current_time - last_seen > 5]
+            for yolo_id in to_delete:
+                if yolo_id in self.tree_items:
+                    self.table.delete(self.tree_items[yolo_id])
+                    del self.tree_items[yolo_id]
+                    del self.resistors_data[yolo_id]
+                    del self.last_seen[yolo_id]
+            time.sleep(1)
+
+    def on_row_double_click(self):
         item_id = self.table.selection()[0]
         yolo_id = int(self.table.item(item_id, "values")[0])
         colors = self.resistors_data[yolo_id]["colors"]
@@ -213,7 +233,7 @@ class EduVision:
             new_colors_list = [color.strip() for color in new_colors.split(",")]
             if len(new_colors_list) >= 4:
                 if yolo_id not in self.frozen_objects or not self.frozen_objects[yolo_id]:
-                    resistance, tolerance = self.calculate_resistance(new_colors_list[:4], self.color_values)
+                    resistance, tolerance = calculate_resistance(new_colors_list[:4], self.color_values)
                     self.update_resistor_entry(yolo_id, new_colors_list[:4], resistance, tolerance)
                     self.update_frame_with_new_colors(self.frame, yolo_id, new_colors_list[:4])
                 self.frozen_objects[yolo_id] = True
@@ -232,11 +252,10 @@ class EduVision:
                         lower, upper = self.color_ranges[color_name]
                         mask = cv2.inRange(hsv, lower, upper)
                         if cv2.countNonZero(mask) > 0:
-                            cv2.putText(frame, color_name, (x1, y1 - 10),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                            cv2.putText(frame, color_name, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
 
                     if yolo_id not in self.frozen_objects or not self.frozen_objects[yolo_id]:
-                        resistance, tolerance = self.calculate_resistance(new_colors[:4], self.color_values)
+                        resistance, tolerance = calculate_resistance(new_colors[:4], self.color_values)
                         cv2.putText(frame, f"{resistance} Ohms {tolerance}%", (x1, y2 + 20),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
                     break
@@ -249,7 +268,7 @@ class EduVision:
             self.frozen_objects[yolo_id] = True
             self.table.set(self.tree_items[yolo_id], column="Action", value="Unfreeze")
 
-    def on_freeze_button_click(self, event):
+    def on_freeze_button_click(self):
         item_id = self.table.selection()[0]
         yolo_id = int(self.table.item(item_id, "values")[0])
         self.toggle_freeze(yolo_id)
