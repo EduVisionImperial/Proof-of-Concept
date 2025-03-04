@@ -103,6 +103,10 @@ dist/
 dist/*
 Documentation/
 Documentation/*
+python/
+python/*
+site-packages/
+site-packages/*
 custom_db.yaml
 yolo*.pt
 poetry.lock
