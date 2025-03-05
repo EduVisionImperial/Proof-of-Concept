@@ -171,6 +171,10 @@ class EduVision:
                     if x2 <= x1 or y2 <= y1:
                         continue
 
+                    width = x2 - x1
+                    height = y2 - y1
+                    orientation = "Horizontal" if width > height else "Vertical"
+
                     roi = frame[y1:y2, x1:x2]
                     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
                     recognized_colors = []
@@ -190,8 +194,10 @@ class EduVision:
                         result = calculate_resistance(best_colors[:4], self.color_values)
                         if result is not None:
                             resistance, tolerance = result
-                            cv2.putText(frame, f"ID: {yolo_id}", (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-                            cv2.putText(frame, f"{resistance} Ohms {tolerance}%", (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+                            cv2.putText(frame, f"ID: {yolo_id}", (x1, y1 - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                                        (0, 0, 0), 2)
+                            cv2.putText(frame, f"{resistance} Ohms {tolerance}% {orientation}", (x1, y2 + 20),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
                             self.update_resistor_entry(yolo_id, best_colors[:4], resistance, tolerance)
                             self.color_detections[yolo_id] = []
 
