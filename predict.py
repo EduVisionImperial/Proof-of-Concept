@@ -316,6 +316,11 @@ class EduVision:
                         return True
                     if abs(x1 - ox1) < 10 and abs(x2 - ox2) < 10:
                         return True
+                    if distance < 30:
+                        if abs(y1 - oy2) < 5 and abs(y2 - oy1) < 5:
+                            return True
+                        if abs(x1 - ox2) < 5 and abs(x2 - ox1) < 5:
+                            return True
         return False
 
     def on_freeze_button_click(self):
