@@ -11,11 +11,24 @@ import math
 import dotenv
 import os
 import numpy as np
-from sklearn.cluster import KMeans
 
+"""
+Loads environment variables from a '.env' file and retrieves specific variables.
+
+Results:
+    - Loads environment variables into the program's environment.
+    - Retrieves the 'CONNECTION' and 'CLOUD_API' variables.
+    - Raises a 'ValueError' if the 'CONNECTION' variable is not set.
+
+Behaviour:
+    - Uses the 'dotenv' library to load variables from a '.env' file.
+    - Ensures that the 'CONNECTION' variable is mandatory for the program to run.
+"""
 
 dotenv.load_dotenv()
+
 connection = os.getenv('CONNECTION')
+cloud_API = os.getenv('CLOUD_API')
 if not connection:
     raise ValueError("CONNECTION environment is not set")
 
@@ -23,12 +36,14 @@ def list_cameras():
     """
     Lists all available cameras connected to the system.
 
-    This function uses the `v4l2-ctl` command to retrieve a list of video devices
-    and their associated names. It parses the output to create a dictionary
-    mapping device paths (e.g., `/dev/video0`) to their corresponding device names.
+    Results:
+        - Returns a dictionary with video device paths as keys and device names as values.
+        - If no cameras are found, the dictionary will be empty.
 
-    Returns:
-        dict: A dictionary where keys are device paths and values are device names.
+    Behaviour:
+        - List of connected video devices.
+        - Parses the command output to extract device names and their corresponding paths.
+        - Ensures that each device name is unique in the returned dictionary.
     """
     result = subprocess.run(['v4l2-ctl', '--list-devices'], stdout=subprocess.PIPE, text=True)
     output = result.stdout.split('\n')
@@ -45,18 +60,19 @@ def list_cameras():
 
     return cameras
 
-
 def select_camera():
     """
-    Prompts the user to select a camera from the list of available cameras.
+    Prompts the user to select a camera from the available list.
 
-    This function retrieves a list of connected cameras using the `list_cameras` function,
-    displays the available options in a dialog box, and allows the user to select a camera
-    by entering its corresponding number.
+    Results:
+        - Returns the selected camera device path as a string.
+        - If no cameras are found, displays an error message and returns None.
+        - If the user makes an invalid selection, displays an error message and returns None.
 
-    Returns:
-        str: The device path of the selected camera (e.g., '/dev/video0') if a valid selection is made.
-        None: If no cameras are found or the selection is invalid.
+    Behaviour:
+        - Calls 'list_cameras' to retrieve a dictionary of available cameras.
+        - Displays a dialog box for the user to select a camera by entering its number.
+        - Validates the user's selection and returns the corresponding device path.
     """
     cameras = list_cameras()
     if not cameras:
@@ -66,62 +82,115 @@ def select_camera():
     camera_selection = simpledialog.askinteger("Select Camera", f"Available cameras:\n" + "\n".join(camera_list) + "\nEnter camera number:")
     if camera_selection is not None and 0 <= camera_selection < len(cameras):
         selected_device = list(cameras.keys())[camera_selection]
-        print(f"Selected camera: {selected_device}")
         return selected_device
     messagebox.showerror("Error", "Invalid camera selection")
     return None
 
-
 def calculate_resistance(colors, color_values):
     """
-        Calculates the resistance value of a resistor based on its color bands.
+    Calculates the resistance value of a resistor based on its color bands.
 
-        Args:
-            colors (list): A list of color names representing the bands on the resistor.
-            color_values (dict): A dictionary mapping color names to their corresponding numeric values.
+    Args:
+        colors: A list of color names representing the bands on the resistor.
+        color_values: A dictionary mapping color names to their corresponding numeric values.
 
-        Returns:
-            float: The calculated resistance value in ohms, or None if the input is invalid.
+    Results:
+        - Returns the calculated resistance value as an integer.
+        - If the input list of colors has fewer than 4 elements, returns None.
+
+    Behaviour:
+        - Extracts the first two digits from the color bands.
+        - Determines the multiplier based on the third color band.
+        - Computes the resistance value
     """
     if len(colors) < 4:
         return None
 
-    first_digit = color_values[colors[0]]
-    second_digit = color_values[colors[1]]
-    multiplier = 10 ** color_values[colors[2]]
+    first_digit = color_values.get(colors[0], 0)
+    second_digit = color_values.get(colors[1], 0)
+    multiplier = 10 ** color_values.get(colors[2], 0)
     resistance = (first_digit * 10 + second_digit) * multiplier
 
     return resistance
 
+def mask_by_color_ranges(hsv_roi, color_ranges):
+    """
+    Masks the input HSV region of interest based on specified color ranges.
+
+    Args:
+        hsv_roi: HSV region of interest.
+        color_ranges: A dictionary where keys are color names and values are lists of HSV range tuples.
+
+    Results:
+        - Returns a binary mask where pixels within the specified color ranges are set to 255, and others are set to 0.
+
+    Behaviour:
+        - Iterates through the provided color ranges.
+        - Applies the 'cv2.inRange' function for each HSV range to create a mask.
+        - Combines all masks using a bitwise OR operation to produce the final mask.
+    """
+    mask = np.zeros(hsv_roi.shape[:2], dtype=np.uint8)
+    for hsv_ranges in color_ranges.values():
+        for lower, upper in hsv_ranges:
+            mask |= cv2.inRange(hsv_roi, lower, upper)
+    return mask
+
+def apply_white_balance(image):
+    """
+    Adjusts the white balance of the input image.
+
+    Args:
+        image: A BGR image represented as a NumPy array.
+
+    Results:
+        - Returns a new image with adjusted white balance.
+        - Balances the blue and red channels relative to the green channel.
+
+    Behaviour:
+        - Splits the image into blue, green, and red channels.
+        - Calculates the mean intensity of each channel.
+        - Scales the blue and red channels to match the green channel's mean intensity.
+        - Clips the scaled values to the valid range and merges the channels back.
+    """
+    b, g, r = cv2.split(image)
+    b_mean, g_mean, r_mean = np.mean(b), np.mean(g), np.mean(r)
+    b_scale = g_mean / b_mean if b_mean != 0 else 1
+    r_scale = g_mean / r_mean if r_mean != 0 else 1
+    b = np.clip(b * b_scale, 0, 255).astype(np.uint8)
+    r = np.clip(r * r_scale, 0, 255).astype(np.uint8)
+    return cv2.merge([b, g, r])
+
 class EduVision:
     def __init__(self, main):
         """
-        Initializes the EduVision application.
+        Initializes application.
 
         Args:
-            main (tk.Tk): The main Tkinter root window.
+            main: Tkinter root window.
 
-        Behavior:
-            - Sets up the main application window with a title, size, and UI components.
-            - Initializes the connection to the API and retrieves a connection ID.
+        Results:
+            - Initializes the EduVision application UI and internal data structures.
+            - Establishes a connection with the server and retrieves a connection ID.
             - Loads the YOLO model for object detection.
-            - Initializes data structures for resistor detection and tracking.
-            - Defines color ranges for resistor bands and background detection.
-            - Creates UI elements such as buttons, labels, and a table for displaying results.
             - Starts a background thread to update the server with resistor data.
+
+        Behaviour:
+            - Sets up the main application window with a title and dimensions.
+            - Creates UI elements such as labels, buttons, and a table for displaying resistor data.
+            - Initializes internal dictionaries and variables for tracking resistors and their properties.
+            - Starts a background thread to continuously send updates to the server.
         """
         self.root = main
         self.root.title("EduVision")
         self.root.geometry("600x400")
-        self.camera_index = None
+
         response = requests.post(f"{connection}/initialize")
         if response.status_code == 200:
             self.connection_id = response.json().get("connection_id")
-            print(f"Connection ID: {self.connection_id}")
         else:
             raise Exception("Failed to initialize connection with the API")
 
-        self.label = tk.Label(root, text=f"Connection: {self.connection_id}")
+        self.label = tk.Label(self.root, text=f"Connection: {self.connection_id}")
         self.label.pack(pady=5)
 
         self.model = YOLO("./validation/best.pt")
@@ -137,50 +206,37 @@ class EduVision:
         self.resistor_last_colors = {}
         self.last_seen = {}
 
-
         self.color_values = {
             "black": 0, "brown": 1, "red": 2, "orange": 3, "yellow": 4,
-            "green": 5, "blue": 6, "violet": 7, "gray": 8, "white": 9, "gold": 10, "silver": 11
+            "green": 5, "blue": 6, "violet": 7, "gray": 8, "white": 9,
+            "gold": -1, "silver": -2
         }
 
-        # Initialize color detection data structures
-        self.color_detections = {}
-        self.resistor_frame_count = {}
-        self.resistor_last_colors = {}
-        self.resistor_last_result = {}
-
-        # Color ranges for resistors
         self.color_ranges = {
-            'black': [((0, 0, 0), (255, 50, 50))],
-            'brown': [((0, 60, 20), (20, 255, 80))],
-            'red': [((0, 60, 40), (10, 255, 100)), ((170, 60, 40), (180, 255, 100))],
-            'orange': [((10, 60, 50), (30, 255, 120))],
-            'yellow': [((25, 60, 60), (40, 255, 140))],
-            'green': [((50, 60, 40), (80, 255, 100))],
-            'blue': [((90, 60, 40), (120, 255, 100))],
-            'violet': [((130, 60, 40), (160, 255, 100))],
-            'gray': [((0, 0, 60), (255, 50, 100))],
-            'white': [((0, 0, 120), (255, 50, 255))],
-            'gold': [((20, 60, 80), (40, 255, 160))],
-            'silver': [((0, 0, 80), (255, 50, 140))]
+            "black": [((0, 0, 0), (180, 255, 60))],
+            "brown": [((5, 40, 20), (35, 255, 200))],
+            "red": [((0, 60, 60), (15, 255, 255)), ((160, 60, 60), (180, 255, 255))],
+            "orange": [((10, 60, 60), (30, 255, 255))],
+            "yellow": [((25, 60, 60), (45, 255, 255))],
+            "green": [((35, 30, 30), (85, 255, 255))],
+            "blue": [((90, 30, 30), (135, 255, 255))],
+            "violet": [((130, 30, 30), (165, 255, 255))],
+            "gray": [((0, 0, 60), (180, 50, 180))],
+            "white": [((0, 0, 190), (180, 40, 255))],
+            "gold": [((20, 40, 60), (45, 255, 220))],
+            "silver": [((0, 0, 140), (180, 40, 230))],
         }
 
-        # Background color ranges for 4-band and 5-band resistors
-        self.bc_ranges = {
-            '4-band': [((0, 0, 60), (255, 50, 100))],
-            '5-band': [((90, 30, 80), (120, 100, 140))]
-        }
-
-        self.start_button = tk.Button(root, text="Start Detection", command=self.start_detection)
+        self.start_button = tk.Button(self.root, text="Start Detection", command=self.start_detection)
         self.start_button.pack(pady=5)
 
-        self.stop_button = tk.Button(root, text="Stop Detection", command=self.stop_detection)
+        self.stop_button = tk.Button(self.root, text="Stop Detection", command=self.stop_detection)
         self.stop_button.pack(pady=5)
 
-        self.global_resistance_label = tk.Label(root, text="Global Resistance: 0 Ohms")
+        self.global_resistance_label = tk.Label(self.root, text="Global Resistance: 0 Ohms")
         self.global_resistance_label.pack(pady=5)
 
-        self.table = ttk.Treeview(root, columns=("ID", "Colors", "Resistance", "Orientation", "Action"),
+        self.table = ttk.Treeview(self.root, columns=("ID", "Colors", "Resistance", "Orientation", "Action"),
                                   show="headings")
         self.table.heading("ID", text="ID")
         self.table.heading("Colors", text="Colors")
@@ -196,21 +252,17 @@ class EduVision:
 
     def update_server(self):
         """
-            Periodically updates the server with the current resistor data and total resistance.
+        Sending data with the resistors and their resistances values for each instance to the server.
 
-            This method runs in a loop while the application is active. It sends the following data to the server:
-            - A list of resistors with their resistance values.
-            - The total resistance of the circuit.
+        Results:
+            - Sends the list of resistors and their resistances to the server.
+            - Updates the total resistance on the server.
 
-            If an error occurs during the update, it logs the exception and continues the loop.
-
-            Behavior:
-            - Checks if the detection process is running (`self.running`).
-            - Sends POST requests to update the server with resistor data and total resistance.
-            - Waits for 2 seconds before the next update.
-
-            Note:
-            - This method is intended to run in a separate thread.
+        Behaviour:
+            - Continuously runs in a loop while the application is active.
+            - Checks if detection is running.
+            - Posts the resistors data and total resistance to the server every 2 seconds.
+            - Handles exceptions by printing an error message if the server update fails.
         """
         while True:
             if self.running:
@@ -230,15 +282,18 @@ class EduVision:
 
     def start_detection(self):
         """
-            Starts the object detection process.
+        Starts the detection process by selecting a camera and initializing detection.
 
-            This method performs the following steps:
+        Results:
+            - Initializes the detection process by selecting a camera.
+            - Starts threads for object detection and cleanup of old entries.
+            - Displays a message if detection is already running.
+
+        Behaviour:
             - Checks if detection is already running.
-            - Prompts the user to select a camera using the `select_camera` function.
-            - If a valid camera is selected, sets the `running` flag to True.
-            - Starts a thread for object detection (`detect_objects`).
-            - Starts another thread for cleaning up old entries (`cleanup_old_entries`).
-            - Displays an informational message if detection is already running.
+            - Prompts the user to select a camera if not running.
+            - Starts the detection and cleanup threads if a camera is selected.
+            - Displays an informational message if detection is already active.
         """
         if not self.running:
             self.camera_index = select_camera()
@@ -253,14 +308,17 @@ class EduVision:
 
     def stop_detection(self):
         """
-            Stops the object detection process.
+        Stops the detection process and cleans up resources.
 
-            This method performs the following steps:
-            - Checks if the detection process is currently running.
-            - If running, stops the detection by setting the `running` flag to False.
-            - Waits for the detection and cleanup threads to finish using `join`.
-            - Displays an informational message indicating that detection has stopped.
-            - If detection is not running, displays an informational message stating so.
+        Results:
+            - Stops the detection process if it is currently running.
+            - Joins the threads responsible for detection and cleanup.
+            - Displays a message indicating that detection has stopped.
+
+        Behaviour:
+            - Checks if the detection process is running.
+            - If running, sets 'self.running' to False and joins the threads.
+            - If not running, displays a message indicating that detection is not active.
         """
         if self.running:
             self.running = False
@@ -272,29 +330,24 @@ class EduVision:
 
     def detect_objects(self):
         """
-            Captures video frames from the selected camera and performs object detection.
+        Detect resistors using YOLO model and process video frames from the camera.
 
-            This method:
-            - Opens the camera using the selected camera index.
-            - Continuously reads frames while the detection process is running.
-            - Uses the YOLO model to track objects in each frame.
-            - Updates the internal data structures with detected object IDs and their last seen timestamps.
-            - Calls the `recognize_resistor_colors` method to process detected objects.
-            - Displays the video feed with bounding boxes and detection results in a window.
-            - Stops the process if the 'q' key is pressed.
+        Results:
+            - Captures video frames from the selected camera.
+            - Tracks objects in the video frames using the YOLO model.
+            - Calls 'recognize_resistor_colors' to process detected objects and extract resistor color information.
 
-            Behavior:
-            - Releases the camera and closes all OpenCV windows when the detection stops.
-            - Displays an error message if the camera cannot be opened.
-
-            Note:
-            - This method is intended to run in a separate thread.
+        Behaviour:
+            - Continuously reads frames from the camera while 'self.running' is True.
+            - Stops processing if the camera cannot be opened or if the user presses the "q" key.
+            - Releases the camera and closes all OpenCV windows when stopped.
         """
         cap = cv2.VideoCapture(self.camera_index)
         if not cap.isOpened():
             messagebox.showerror("Error", "Could not open camera")
             return
 
+        self.running = True
         while self.running:
             ret, frame = cap.read()
             if not ret:
@@ -302,9 +355,9 @@ class EduVision:
 
             self.frame = frame
 
-            self.results = self.model.track(source=frame, conf=0.3, show_conf=False, persist=True,device="cpu")
+            self.results = self.model.track(source=frame, conf=0.1, show_conf=False, persist=True, device="cpu")
             # With GPU
-            # self.results = self.model.track(source=frame, conf=0.3, show_conf=False, persist=True, device="0")
+            # self.results = self.model.track(source=frame, conf=0.1, show_conf=False, persist=True, device="0")
 
             for result in self.results:
                 for obj in result.boxes:
@@ -316,419 +369,209 @@ class EduVision:
 
             self.recognize_resistor_colors(frame, self.results)
             cv2.imshow("EduVision", frame)
+            cv2.waitKey()
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
         cap.release()
         cv2.destroyAllWindows()
 
-    def mask_colors_along_lines(self, hsv_roi, lines):
-        """
-            Creates a mask for specific colors along detected lines in a region of interest (ROI).
-
-            Args:
-                hsv_roi (numpy.ndarray): The HSV image of the region of interest.
-                lines (list): A list of lines, where each line is represented as (x1, y1, x2, y2).
-
-            Returns:
-                numpy.ndarray: A binary mask highlighting the specified colors along the detected lines.
-
-            Behavior:
-                - Initializes an empty mask with the same dimensions as the ROI.
-                - Draws lines on the mask based on the provided line coordinates.
-                - Iterates through predefined color ranges and applies bitwise operations to isolate colors
-                  along the drawn lines.
-                - Combines the results into a final mask.
-        """
-        mask = np.zeros(hsv_roi.shape[:2], dtype=np.uint8)
-        if lines is not None:
-            for x1, y1, x2, y2 in lines:
-                center_x1 = (x1 + x2) // 2
-                center_y1 = (y1 + y2) // 2
-                center_x2 = center_x1
-                center_y2 = center_y1
-
-                cv2.line(mask, (center_x1, center_y1), (center_x2, center_y2), 255, 2)
-
-        final_mask = np.zeros_like(mask)
-        for color_name, hsv_ranges in self.color_ranges.items():
-            for lower, upper in hsv_ranges:
-                color_mask = cv2.inRange(hsv_roi, lower, upper)
-                final_mask = cv2.bitwise_or(final_mask, cv2.bitwise_and(color_mask, mask))
-
-        return final_mask
-
-    def rgb_to_hsl(self, rgb):
-        """
-            Converts an RGB color to HSL (Hue, Saturation, Lightness) format.
-
-            Args:
-                rgb (numpy.ndarray): An array containing the RGB values, where each value is in the range [0, 255].
-
-            Returns:
-                numpy.ndarray: An array containing the HSL values:
-                    - Hue (H) scaled to [0, 256]
-                    - Saturation (S) scaled to [0, 255]
-                    - Lightness (L) scaled to [0, 255]
-
-            Behavior:
-                - Normalizes the RGB values to the range [0, 1].
-                - Calculates the maximum and minimum values among R, G, and B.
-                - Computes Lightness (L) as the average of the max and min values.
-                - If the max and min values are equal, sets Saturation (S) and Hue (H) to 0.
-                - Otherwise, calculates Saturation (S) based on the difference between max and min.
-                - Determines Hue (H) based on which color channel (R, G, or B) is the maximum.
-                - Scales the resulting HSL values to the appropriate ranges.
-        """
-        r, g, b = rgb / 255.0
-        max_val = max(r, g, b)
-        min_val = min(r, g, b)
-        l = (max_val + min_val) / 2
-        if max_val == min_val:
-            s = h = 0
-        else:
-            d = max_val - min_val
-            s = d / (2 - max_val - min_val) if l > 0.5 else d / (max_val + min_val)
-            if max_val == r:
-                h = (g - b) / d + (6 if g < b else 0)
-            elif max_val == g:
-                h = (b - r) / d + 2
-            else:
-                h = (r - g) / d + 4
-            h /= 6
-        return np.array([h * 256, s * 255, l * 255], dtype=np.float32)
-
-    def modified_niblack_threshold(self, gray, window_size, j=0.0036):
-        """
-            Applies a modified Niblack thresholding algorithm to a grayscale image.
-
-            Args:
-                gray (numpy.ndarray): The input grayscale image.
-                window_size (int): The size of the sliding window used for local thresholding.
-                j (float): A parameter that adjusts the standard deviation term in the threshold calculation.
-
-            Returns:
-                numpy.ndarray: A binary image where pixels are set to 255 if they are above the calculated threshold,
-                               and 0 otherwise.
-
-            Behavior:
-                - Pads the input image to handle edge cases for the sliding window.
-                - Iterates over each pixel in the image and calculates the local mean and standard deviation.
-                - Computes a threshold value for each pixel based on the local statistics.
-                - Sets the pixel value to 255 if it is greater than the threshold, otherwise sets it to 0.
-        """
-        h, w = gray.shape
-        threshold_img = np.zeros_like(gray)
-        pad = window_size // 2
-        padded = cv2.copyMakeBorder(gray, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
-
-        for y in range(h):
-            for x in range(w):
-                window = padded[y:y + window_size, x:x + window_size]
-                m = np.mean(window)
-                g = window.flatten()
-                n = g.size
-                std_term = np.sqrt((j / n) * np.sum(g ** 2))
-                T = m + std_term
-                threshold_img[y, x] = 255 if gray[y, x] > T else 0
-        return threshold_img
-
-    def align_resistor(self, gray, binary):
-        """
-            Aligns a resistor in the image to a horizontal orientation.
-
-            Args:
-                gray (numpy.ndarray): The grayscale image of the resistor.
-                binary (numpy.ndarray): The binary mask of the resistor.
-
-            Returns:
-                tuple: A tuple containing the aligned grayscale image and the rotation angle in degrees.
-
-            Behavior:
-                - Finds contours in the binary mask and selects the largest one.
-                - Computes the convex hull of the largest contour.
-                - Calculates image moments to determine the orientation of the resistor.
-                - Rotates the image to align the resistor horizontally.
-                - Returns the aligned image and the rotation angle.
-        """
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return gray, 0
-        largest_contour = max(contours, key=cv2.contourArea)
-        hull = cv2.convexHull(largest_contour)
-
-        moments = cv2.moments(hull)
-        if moments['m00'] == 0:
-            return gray, 0
-        A = moments['m00']
-        cx = moments['m10'] / A
-        cy = moments['m01'] / A
-        Mxx = moments['m20'] / A - cx ** 2
-        Myy = moments['m02'] / A - cy ** 2
-        Mxy = moments['m11'] / A - cx * cy
-        if abs(Mxx - Myy) < 1e-10:
-            theta_rad = 0
-        else:
-            theta_rad = 0.5 * math.atan2(2 * Mxy, Myy - Mxx)
-        theta_deg = math.degrees(theta_rad)
-
-        h, w = gray.shape
-        M = cv2.getRotationMatrix2D((w / 2, h / 2), theta_deg, 1)
-        aligned = cv2.warpAffine(gray, M, (w, h))
-        return aligned, theta_deg
-
-    def segment_resistor_body(self, img, binary):
-        """
-            Segments the body of a resistor from the given image.
-
-            Args:
-                img (numpy.ndarray): The input image of the resistor.
-                binary (numpy.ndarray): The binary mask of the resistor.
-
-            Returns:
-                numpy.ndarray: The segmented region of the resistor body.
-
-            Behavior:
-                - Extracts a region of interest (ROI) around the vertical center of the image.
-                - Applies erosion to the binary mask to remove noise and refine the resistor's shape.
-                - Identifies the top and bottom borders of the resistor in the eroded mask.
-                - Determines the left and right boundaries of the resistor body based on the borders.
-                - Returns the segmented region of the resistor body.
-        """
-        h, w = img.shape[:2]
-        center_y = h // 2
-        roi = img[max(0, center_y - 40):min(h, center_y + 40), :]
-        binary_roi = binary[max(0, center_y - 40):min(h, center_y + 40), :]
-
-        kernel = np.ones((3, 3), np.uint8)
-        eroded = cv2.erode(binary_roi, kernel, iterations=20)
-
-        top_border = np.where(eroded[0, :])[0]
-        bottom_border = np.where(eroded[-1, :])[0]
-        if len(top_border) < 2 or len(bottom_border) < 2:
-            return roi
-        x_left = max(top_border[0], bottom_border[0])
-        x_right = min(top_border[-1], bottom_border[-1])
-        return img[:, x_left:x_right + 1]
-
-    def extract_color_bands(self, img, j=0.0036):
-        """
-        Extracts color bands from a resistor image.
-
-        Args:
-            img (numpy.ndarray): The input image of the resistor.
-            j (float): A parameter for the modified Niblack thresholding.
-
-        Returns:
-            tuple: A sorted list of color bands (each represented as a tuple of the band image and its position)
-                   and a boolean indicating whether the resistor is a 4-band type.
-
-        Behavior:
-            - Calculates the background color of the image using histograms.
-            - Subtracts the background color to isolate the resistor.
-            - Applies modified Niblack thresholding to create a binary mask.
-            - Performs connected component analysis to identify potential color bands.
-            - Determines whether the resistor is a 4-band or 5-band type based on predefined background color ranges.
-            - Ensures the number of detected bands matches the expected count for the resistor type.
-        """
-        # Find background color
-        hist_r = cv2.calcHist([img], [0], None, [256], [0, 256]).flatten()
-        hist_g = cv2.calcHist([img], [1], None, [256], [0, 256]).flatten()
-        hist_b = cv2.calcHist([img], [2], None, [256], [0, 256]).flatten()
-        bc = (np.argmax(hist_r), np.argmax(hist_g), np.argmax(hist_b))
-
-        # Generate background image and subtract
-        bc_img = np.full_like(img, bc)
-        diff = cv2.absdiff(img, bc_img)
-        diff_gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-        binary_diff = self.modified_niblack_threshold(diff_gray, window_size=95, j=j)
-
-        # Connected component analysis
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary_diff, connectivity=8)
-        color_bands = []
-        for i in range(1, num_labels):
-            if stats[i, cv2.CC_STAT_HEIGHT] >= 80:  # Height threshold
-                xc = int(centroids[i, 0])
-                x_start = max(0, xc - 10)
-                x_end = min(img.shape[1], xc + 10)
-                cb = img[:, x_start:x_end]
-                color_bands.append((cb, xc))
-
-        # Determine if 4-band or 5-band
-        hsl_bc = self.rgb_to_hsl(np.array(bc))
-        is_4band = any(
-            all(lower[i] <= hsl_bc[i] <= upper[i] for i in range(3)) for lower, upper in self.bc_ranges['4-band'])
-        expected_bands = 4 if is_4band else 5
-        if len(color_bands) != expected_bands:
-            if is_4band and len(color_bands) != 4:
-                color_bands = color_bands[:4] if len(color_bands) > 4 else color_bands
-            else:
-                color_bands = color_bands[:5] if len(color_bands) > 5 else color_bands
-        return sorted(color_bands, key=lambda x: x[1]), is_4band
-
-    def identify_colors(self, color_bands):
-        """
-        Identifies the colors of resistor bands from the given color band regions.
-
-        Args:
-            color_bands (list): A list of tuples where each tuple contains a color band image (numpy array)
-                                and its position.
-
-        Returns:
-            list: A list of recognized color names corresponding to the detected color bands.
-
-        Behavior:
-            - Converts each color band image to the HLS color space.
-            - Uses KMeans clustering to determine the dominant color in the band.
-            - Matches the dominant color against predefined color ranges to identify the color name.
-            - Appends the recognized color name to the result list if a match is found.
-        """
-        recognized_colors = []
-        for cb, _ in color_bands:
-            hsl = cv2.cvtColor(cb, cv2.COLOR_BGR2HLS)
-            pixels = hsl.reshape(-1, 3)
-            kmeans = KMeans(n_clusters=1, random_state=42)
-            kmeans.fit(pixels)
-            center = kmeans.cluster_centers_[0]
-            min_dist = float('inf')
-            color_name = None
-            for name, ranges in self.color_ranges.items():
-                for lower, upper in ranges:
-                    if all(lower[i] <= center[i] <= upper[i] for i in range(3)):
-                        dist = np.sum((center - (np.array(lower) + np.array(upper)) / 2) ** 2)
-                        if dist < min_dist:
-                            min_dist = dist
-                            color_name = name
-            if color_name:
-                recognized_colors.append(color_name)
-        return recognized_colors
-
-    def check_sequence(self, colors, is_4band):
-        """
-        Ensures the correct sequence of color bands for a resistor.
-
-        Args:
-            colors (list): A list of detected color bands.
-            is_4band (bool): Indicates whether the resistor is a 4-band type.
-
-        Returns:
-            list: The reordered color bands if necessary, otherwise the original list.
-
-        Behavior:
-            - Reverses the color sequence if the first or second band is gold or silver.
-            - For resistors with 4 or more bands, applies additional logic to determine the correct order.
-        """
-        if not colors:
-            return colors
-        if colors[0] in ['gold', 'silver'] or (len(colors) > 1 and colors[1] in ['gold', 'silver']):
-            return colors[::-1]
-        if len(colors) >= 4:
-            d_1L_2L = 1
-            d_1R_2R = 1
-            if d_1L_2L > d_1R_2R:
-                return colors[::-1]
-        return colors
-
     def recognize_resistor_colors(self, frame, results):
         """
-        Recognizes resistor colors from detected objects in the frame.
-
         Args:
-            frame (numpy.ndarray): The current video frame from the camera.
-            results (list): The detection results from the YOLO model, containing bounding boxes and object IDs.
+            frame: The current video frame captured from the camera.
+            results: The detection results from the YOLO model, containing bounding boxes and object IDs.
 
-        Behavior:
-            - Iterates through detected objects and extracts the region of interest (ROI) for each resistor.
-            - Applies thresholding and alignment to prepare the resistor for color band extraction.
-            - Segments the resistor body and identifies color bands using predefined color ranges.
-            - Stabilizes color detections over multiple frames to ensure accuracy.
-            - Calculates the resistance value based on the detected color bands.
-            - Updates the UI with the detected resistor's ID, resistance, and bounding box.
+        Results:
+            - Updates the 'self.color_detections' dictionary with detected colors for each resistor.
+            - Updates the 'self.resistor_last_colors' and 'self.resistor_last_result' dictionaries with stable colors and calculated resistance values.
+            - Calls 'update_resistor_entry' to update the UI and internal data structures.
+
+        Behaviour:
+            - Processes each detected resistor in the frame.
+            - Expands bounding boxes slightly to account for detection inaccuracies.
+            - Determines the orientation of each resistor.
+            - Segments the resistor into bands and identifies the dominant color in each band.
+            - Handles overlapping resistors by skipping them.
+            - Calculates the resistance value based on the detected colors.
+            - Ensures stable color detection by averaging results over multiple frames.
         """
+        frame = apply_white_balance(frame)
+        frame = cv2.convertScaleAbs(frame, alpha=1.5, beta=0)
+
+        expanded_boxes = []
         for result in results:
             for obj in result.boxes:
-                if obj.id is None:
-                    continue
-                yolo_id = int(obj.id.item())
-                x1, y1, x2, y2 = map(int, obj.xyxy[0].tolist())
-                if x2 <= x1 or y2 <= y1:
-                    continue
+                if obj.id is not None:
+                    yolo_id = int(obj.id.item())
+                    x1, y1, x2, y2 = map(int, obj.xyxy[0])
+                    ex1 = max(0, x1 - 2)
+                    ey1 = max(0, y1 - 2)
+                    ex2 = min(frame.shape[1] - 1, x2 + 2)
+                    ey2 = min(frame.shape[0] - 1, y2 + 2)
+                    expanded_boxes.append((ex1, ey1, ex2, ey2, yolo_id))
 
-                roi = frame[y1:y2, x1:x2]
-                gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        for result in results:
+            for obj in result.boxes:
+                if obj.id is not None:
+                    yolo_id = int(obj.id.item())
+                    x1, y1, x2, y2 = map(int, obj.xyxy[0])
 
-                # Threshold and align
-                binary = self.modified_niblack_threshold(gray, window_size=min(roi.shape[:2]), j=0.0036)
-                aligned, theta = self.align_resistor(gray, binary)
-                aligned_color = cv2.cvtColor(aligned, cv2.COLOR_GRAY2BGR) if len(aligned.shape) == 2 else aligned
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(frame.shape[1] - 1, x2), min(frame.shape[0] - 1, y2)
 
-                # Segment resistor body
-                binary_aligned = self.modified_niblack_threshold(aligned, window_size=min(aligned.shape[:2]), j=0.0036)
-                resistor_body = self.segment_resistor_body(aligned_color, binary_aligned)
+                    width = x2 - x1
+                    height = y2 - y1
+                    orientation = "Horizontal" if width > height else "Vertical"
 
-                # Extract and identify color bands
-                color_bands, is_4band = self.extract_color_bands(resistor_body)
-                recognized_colors = self.identify_colors(color_bands)
+                    overlap = False
 
-                # Check sequence
-                recognized_colors = self.check_sequence(recognized_colors, is_4band)
 
-                # Store and stabilize detections
-                if yolo_id not in self.color_detections:
-                    self.color_detections[yolo_id] = []
-                    self.resistor_frame_count[yolo_id] = 0
-                if recognized_colors:
+                    for ex1, ey1, ex2, ey2, other_id in expanded_boxes:
+                        if other_id != yolo_id:
+                            if not (x2 < ex1 or x1 > ex2 or y2 < ey1 or y1 > ey2):
+                                overlap = True
+                                break
+                    if overlap:
+                        continue
+
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+
+                    roi = frame[y1:y2, x1:x2]
+                    if roi.size == 0:
+                        continue
+
+                    gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+                    _, thresh = cv2.threshold(gray_roi, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+                    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+                    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+                    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+
+                    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    if not contours:
+                        continue
+
+                    largest_contour = max(contours, key=cv2.contourArea)
+                    rect = cv2.minAreaRect(largest_contour)
+                    angle = rect[2]
+                    if angle < -45:
+                        angle += 90
+
+                    center = (roi.shape[1] // 2, roi.shape[0] // 2)
+                    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                    rotated_roi = cv2.warpAffine(roi, M, (roi.shape[1], roi.shape[0]))
+                    rotated_hsv = cv2.cvtColor(rotated_roi, cv2.COLOR_BGR2HSV)
+
+                    recognized_colors = []
+                    num_bands = 4
+                    if orientation == "Horizontal":
+                        segment_width = rotated_hsv.shape[1] // num_bands
+                        for band in range(num_bands):
+                            start_x = band * segment_width
+                            end_x = (band + 1) * segment_width
+                            band_roi = rotated_hsv[:, start_x:end_x]
+                            if band_roi.size == 0:
+                                continue
+                            color_counts = Counter()
+                            for i in range(band_roi.shape[0]):
+                                for j in range(band_roi.shape[1]):
+                                    pixel_hsv = band_roi[i, j]
+                                    for color_name, hsv_ranges in self.color_ranges.items():
+                                        for lower, upper in hsv_ranges:
+                                            if (lower[0] <= pixel_hsv[0] <= upper[0] and
+                                                lower[1] <= pixel_hsv[1] <= upper[1] and
+                                                lower[2] <= pixel_hsv[2] <= upper[2]):
+                                                color_counts[color_name] += 1
+                                                break
+                            if color_counts:
+                                dominant_color = color_counts.most_common(1)[0][0]
+                                recognized_colors.append(dominant_color)
+                                band_x = x1 + start_x + segment_width // 2
+                                band_y = y1 + (y2 - y1) // 2
+                                if 0 <= band_x < frame.shape[1] and 0 <= band_y < frame.shape[0]:
+                                    cv2.circle(frame, (int(band_x), int(band_y)), 3, (0, 0, 255), -1)
+                    else:
+                        segment_height = rotated_hsv.shape[0] // num_bands
+                        for band in range(num_bands):
+                            start_y = band * segment_height
+                            end_y = (band + 1) * segment_height
+                            band_roi = rotated_hsv[start_y:end_y, :]
+                            if band_roi.size == 0:
+                                continue
+                            color_counts = Counter()
+                            for i in range(band_roi.shape[0]):
+                                for j in range(band_roi.shape[1]):
+                                    pixel_hsv = band_roi[i, j]
+                                    for color_name, hsv_ranges in self.color_ranges.items():
+                                        for lower, upper in hsv_ranges:
+                                            if (lower[0] <= pixel_hsv[0] <= upper[0] and
+                                                lower[1] <= pixel_hsv[1] <= upper[1] and
+                                                lower[2] <= pixel_hsv[2] <= upper[2]):
+                                                color_counts[color_name] += 1
+                                                break
+                            if color_counts:
+                                dominant_color = color_counts.most_common(1)[0][0]
+                                recognized_colors.append(dominant_color)
+                                band_x = x1 + (x2 - x1) // 2
+                                band_y = y1 + start_y + segment_height // 2
+                                if 0 <= band_x < frame.shape[1] and 0 <= band_y < frame.shape[0]:
+                                    cv2.circle(frame, (int(band_x), int(band_y)), 3, (0, 0, 255), -1)
+
+                    if recognized_colors:
+                        if len(recognized_colors) >= 4:
+                            if recognized_colors[0] in ["gold", "silver"]:
+                                recognized_colors = recognized_colors[::-1]
+                            elif recognized_colors[-1] not in ["gold", "silver"]:
+                                pass
+
                     self.color_detections[yolo_id].append(tuple(recognized_colors))
-                    if len(self.color_detections[yolo_id]) > 5:
-                        self.color_detections[yolo_id].pop(0)
-                    self.resistor_frame_count[yolo_id] += 1
+                    most_common_colors = Counter(
+                        [color for colors in self.color_detections[yolo_id] for color in colors]).most_common(4)
+                    best_colors = [color for color, _ in most_common_colors]
 
-                    if self.resistor_frame_count[yolo_id] == 10:
-                        most_common = Counter(self.color_detections[yolo_id]).most_common(1)
-                        if most_common:
-                            stable_colors = list(most_common[0][0])
-                            self.resistor_last_colors[yolo_id] = stable_colors
-                            result = calculate_resistance(stable_colors, self.color_values)
-                            if result is not None:
-                                resistance = result
-                                self.resistor_last_result[yolo_id] = resistance
-                                self.update_resistor_entry(yolo_id, stable_colors, resistance, "Unknown",
-                                                           (x1, y1, x2, y2))
-                        self.resistor_frame_count[yolo_id] = 0
+                    if len(best_colors) >= 4:
+                        self.color_detections[yolo_id].append(tuple(best_colors[:4]))
+                        if len(self.color_detections[yolo_id]) > 5:
+                            self.color_detections[yolo_id].pop(0)
+                        self.resistor_frame_count[yolo_id] += 1
 
-                # Display results
-                if yolo_id in self.resistor_last_result:
-                    resistance = self.resistor_last_result[yolo_id]
-                    # Draw bounding box
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    # Display ID and resistance
-                    cv2.putText(frame, f"ID: {yolo_id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255),
-                                2)
-                    cv2.putText(frame, f"{resistance} Ohms", (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                (255, 255, 255), 2)
+                        if self.resistor_frame_count[yolo_id] == 3:
+                            most_common = Counter(self.color_detections[yolo_id]).most_common(1)
+                            if most_common:
+                                stable_colors = list(most_common[0][0])
+                                self.resistor_last_colors[yolo_id] = stable_colors
+                                result = calculate_resistance(stable_colors, self.color_values)
+                                if result is not None:
+                                    resistance = result
+                                    self.resistor_last_result[yolo_id] = resistance
+                                    self.update_resistor_entry(yolo_id, stable_colors, resistance, orientation,
+                                                              (x1, y1, x2, y2))
+                            self.resistor_frame_count[yolo_id] = 0
+
 
     def update_resistor_entry(self, yolo_id, colors, resistance, orientation, bbox):
         """
-        Updates the entry for a resistor in the internal data structures and UI table.
+        Updates the resistor entry in the internal data structures and the UI table.
 
         Args:
-            yolo_id (int): The unique identifier for the resistor.
-            colors (list): A list of detected color bands for the resistor.
-            resistance (float): The calculated resistance value of the resistor.
-            orientation (str): The orientation of the resistor (e.g., horizontal or vertical).
-            bbox (tuple): The bounding box coordinates of the resistor (x1, y1, x2, y2).
+            yolo_id: The unique identifier of the resistor.
+            colors: A list of detected colors for the resistor.
+            resistance: The calculated resistance value of the resistor.
+            orientation: The orientation of the resistor.
+            bbox: The bounding box of the resistor as a tuple.
 
-        Behavior:
-            - Ensures the `colors` list has exactly 4 elements by truncating or padding with "N/A".
-            - Updates the `resistors_data` dictionary with the resistor's details.
-            - Adds or updates the resistor's entry in the UI table.
-            - Recalculates the global resistance of the circuit.
+        Results:
+            - Updates the 'self.resistors_data' dictionary with the resistor's details.
+            - Adds or updates the resistor entry in the UI table.
+            - Calls 'calculate_global_resistance' to update the total resistance.
+
+        Behaviour:
+            - If the resistor is new, it creates a new entry in the UI table.
+            - If the resistor already exists, it updates the existing entry.
+            - Ensures the global resistance is recalculated after updating the entry.
         """
-        if len(colors) > 4:
-            colors = colors[:4]
-        elif len(colors) < 4:
-            colors += ["N/A"] * (4 - len(colors))
-
         self.resistors_data[yolo_id] = {
             "colors": colors,
             "resistance": resistance,
@@ -748,19 +591,12 @@ class EduVision:
 
     def cleanup_old_entries(self):
         """
-        Periodically removes old entries from the UI and internal data structures.
+        Removes old entries from the dictionaries, if they have not been updated within the last 2 seconds.
 
-        This method runs in a separate thread while the application is running. It checks
-        for resistors that have not been updated within the last 2 seconds and removes
-        their corresponding entries from the table, `resistors_data`, and `last_seen`.
-
-        Steps:
-        - Iterates through `last_seen` to find resistors that have not been updated.
-        - Deletes their entries from the UI table and internal dictionaries.
-        - Sleeps for 1 second before repeating the process.
-
-        Note:
-        - This method assumes `self.running` is True while the application is active.
+        Behaviour:
+            - Continuously checks for resistors that have not been updated recently.
+            - Deletes their corresponding entries from the UI table and internal data structures.
+            - Runs in a loop while 'self.running' is True, with a 1-second delay between iterations.
         """
         while self.running:
             current_time = time.time()
@@ -775,18 +611,18 @@ class EduVision:
 
     def calculate_global_resistance(self):
         """
-        Calculates the total resistance of the circuit by determining
-        whether resistors are connected in series or parallel.
+        Calculates the total global resistance of the resistors in the system.
 
-        Logic:
-        - Iterates through all resistors to classify them as parallel or series.
-        - Computes the total resistance for series and parallel connections.
-        - Updates the global resistance label in the UI.
+        Results:
+            Updates the 'self.total_resistance' attribute with the calculated global resistance.
+            Updates the 'self.global_resistance_label' with the calculated resistance value.
 
-        Notes:
-        - If any resistor configuration is invalid, the total resistance is set to infinity.
-        - Series resistance is the sum of individual resistances.
-        - Parallel resistance is calculated as the reciprocal of the sum of reciprocals.
+        Behaviour:
+            - Iterates through the resistors in 'self.resistors_data'.
+            - Classifies resistors as either in series or parallel using 'is_parallel' and 'is_serial' methods.
+            - Calculates the total resistance for series and parallel configurations.
+            - Handles cases where the resistance is infinite.
+            - Updates the UI label to display the calculated global resistance.
         """
         global total_resistance
         series_resistors = {}
@@ -820,20 +656,19 @@ class EduVision:
 
     def is_parallel(self, yolo_id):
         """
-        Determines if a resistor is connected in parallel with another resistor.
+        Determines if a resistor is in a parallel configuration with another resistor.
 
         Args:
-            yolo_id (int): The ID of the resistor to check.
+            yolo_id: The unique identifier of the resistor being checked.
 
         Returns:
-            bool: True if the resistor is in parallel with another, False otherwise.
+            bool: True if the resistor is in a parallel configuration, False otherwise.
 
-        Logic:
-            - Calculates the center coordinates of the bounding box for the given resistor.
+        Behaviour:
+            - Calculates the center of the bounding box for the given resistor.
             - Iterates through all other resistors to compare their positions.
-            - Checks if the distance between the resistors is below a threshold.
-            - Verifies if the resistors are aligned horizontally (small vertical difference)
-              and sufficiently separated horizontally.
+            - Checks if the distance between the centers of the resistors is below a threshold.
+            - Verifies if the resistors are aligned parallel.
         """
         x1, y1, x2, y2 = self.resistors_data[yolo_id]["bbox"]
         center1_x, center1_y = (x1 + x2) / 2, (y1 + y2) / 2
@@ -850,21 +685,20 @@ class EduVision:
 
     def is_serial(self, yolo_id, parallel_resistors):
         """
-        Determines if a resistor is connected in series with another resistor.
+        Determines if a resistor is in a serial configuration with another resistor.
 
         Args:
-            yolo_id (int): The ID of the resistor to check.
-            parallel_resistors (dict): A dictionary of resistors identified as parallel.
+            yolo_id: The unique identifier of the resistor being checked.
+            parallel_resistors: A dictionary of resistors identified as being in parallel configuration.
 
         Returns:
-            bool: True if the resistor is in series with another, False otherwise.
+            bool: True if the resistor is in a serial configuration, False otherwise.
 
-        Logic:
-            - Calculates the center coordinates of the bounding box for the given resistor.
+        Behaviour:
+            - Calculates the center of the bounding box for the given resistor.
             - Iterates through all other resistors to compare their positions.
-            - Checks if the distance between the resistors is below a threshold.
-            - Verifies if the resistors are aligned vertically (small horizontal difference)
-              and sufficiently separated vertically.
+            - Checks if the distance between the centers of the resistors is below a threshold.
+            - Verifies if the resistors are aligned serial.
             - Also checks if the resistor is aligned with any parallel resistors.
         """
         x1, y1, x2, y2 = self.resistors_data[yolo_id]["bbox"]
@@ -886,12 +720,9 @@ class EduVision:
                                 pcenter_x, pcenter_y = (px1 + px2) / 2, (py1 + py2) / 2
                                 if abs(center1_x - pcenter_x) < 20 and abs(center1_y - pcenter_y) > 30:
                                     return True
-
+        return False
 
 if __name__ == "__main__":
-    """
-        Initializes the EduVision application.
-    """
     root = tk.Tk()
     app = EduVision(root)
     root.mainloop()
