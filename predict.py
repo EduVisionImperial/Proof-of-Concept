@@ -6,7 +6,7 @@ from ultralytics import YOLO
 import time
 import subprocess
 from collections import defaultdict, Counter
-
+import math
 
 def list_cameras():
     result = subprocess.run(['v4l2-ctl', '--list-devices'], stdout=subprocess.PIPE, text=True)
@@ -94,10 +94,15 @@ class EduVision:
         self.stop_button = tk.Button(root, text="Stop Detection", command=self.stop_detection)
         self.stop_button.pack(pady=5)
 
-        self.table = ttk.Treeview(root, columns=("ID", "Colors", "Resistance", "Action"), show="headings")
+        self.global_resistance_label = tk.Label(root, text="Global Resistance: 0 Ohms")
+        self.global_resistance_label.pack(pady=5)
+
+        self.table = ttk.Treeview(root, columns=("ID", "Colors", "Resistance", "Orientation", "Action"),
+                                  show="headings")
         self.table.heading("ID", text="ID")
         self.table.heading("Colors", text="Colors")
         self.table.heading("Resistance", text="Resistance")
+        self.table.heading("Orientation", text="Orientation")
         self.table.heading("Action", text="Action")
         self.table.pack(pady=5, fill=tk.BOTH, expand=True)
 
@@ -137,7 +142,7 @@ class EduVision:
 
             self.frame = frame
 
-            self.results = self.model.track(source=frame, conf=0.3, show_conf=False, persist=True)
+            self.results = self.model.track(source=frame, conf=0.3, show_conf=False, persist=True,device=0)
 
             for result in self.results:
                 for obj in result.boxes:
@@ -198,28 +203,32 @@ class EduVision:
                                         (0, 0, 0), 2)
                             cv2.putText(frame, f"{resistance} Ohms {tolerance}% {orientation}", (x1, y2 + 20),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-                            self.update_resistor_entry(yolo_id, best_colors[:4], resistance, tolerance)
+                            self.update_resistor_entry(yolo_id, best_colors[:4], resistance, tolerance, orientation, (x1, y1, x2, y2))
                             self.color_detections[yolo_id] = []
 
-    def update_resistor_entry(self, yolo_id, colors, resistance, tolerance):
+    def update_resistor_entry(self, yolo_id, colors, resistance, tolerance, orientation, bbox):
         self.resistors_data[yolo_id] = {
             "colors": colors,
             "resistance": resistance,
-            "tolerance": tolerance
+            "tolerance": tolerance,
+            "orientation": orientation,
+            "bbox": bbox
         }
         res_str = f"{resistance} Ohms {tolerance}%"
 
         if yolo_id not in self.tree_items:
-            row_id = self.table.insert("", "end", values=(yolo_id, colors, res_str, "Freeze"))
+            row_id = self.table.insert("", "end", values=(yolo_id, colors, res_str, orientation, "Freeze"))
             self.tree_items[yolo_id] = row_id
             self.table.set(row_id, column="Action", value="Freeze")
         else:
-            self.table.item(self.tree_items[yolo_id], values=(yolo_id, colors, res_str, "Freeze"))
+            self.table.item(self.tree_items[yolo_id], values=(yolo_id, colors, res_str, orientation, "Freeze"))
+
+        self.calculate_global_resistance()
 
     def cleanup_old_entries(self):
         while self.running:
             current_time = time.time()
-            to_delete = [yolo_id for yolo_id, last_seen in self.last_seen.items() if current_time - last_seen > 5]
+            to_delete = [yolo_id for yolo_id, last_seen in self.last_seen.items() if current_time - last_seen > 2]
             for yolo_id in to_delete:
                 if yolo_id in self.tree_items:
                     self.table.delete(self.tree_items[yolo_id])
@@ -273,6 +282,46 @@ class EduVision:
         else:
             self.frozen_objects[yolo_id] = True
             self.table.set(self.tree_items[yolo_id], column="Action", value="Unfreeze")
+
+    def calculate_global_resistance(self):
+        series_resistors = []
+        parallel_resistors = []
+
+        for yolo_id, data in self.resistors_data.items():
+            if self.is_parallel(yolo_id):
+                parallel_resistors.append(data["resistance"])
+            else:
+                series_resistors.append(data["resistance"])
+
+        total_series_resistance = sum(series_resistors)
+        total_parallel_resistance = sum(1 / r for r in parallel_resistors) if parallel_resistors else 0
+        total_parallel_resistance = 1 / total_parallel_resistance if total_parallel_resistance else 0
+
+        total_resistance = total_series_resistance + total_parallel_resistance
+        self.global_resistance_label.config(text=f"Global Resistance: {total_resistance} Ohms")
+
+    def is_parallel(self, yolo_id):
+        x1, y1, x2, y2 = self.resistors_data[yolo_id]["bbox"]
+        for other_id, other_data in self.resistors_data.items():
+            if other_id != yolo_id:
+                ox1, oy1, ox2, oy2 = other_data["bbox"]
+                center1_x, center1_y = (x1 + x2) / 2, (y1 + y2) / 2
+                center2_x, center2_y = (ox1 + ox2) / 2, (oy1 + oy2) / 2
+                distance = math.sqrt((center1_x - center2_x) ** 2 + (center1_y - center2_y) ** 2)
+
+                distance_threshold = 50
+
+                if distance < distance_threshold:
+                    if abs(y1 - oy1) < 10 and abs(y2 - oy2) < 10:
+                        return True
+                    if abs(x1 - ox1) < 10 and abs(x2 - ox2) < 10:
+                        return True
+                    if distance < 30:
+                        if abs(y1 - oy2) < 5 and abs(y2 - oy1) < 5:
+                            return True
+                        if abs(x1 - ox2) < 5 and abs(x2 - ox1) < 5:
+                            return True
+        return False
 
     def on_freeze_button_click(self):
         item_id = self.table.selection()[0]
